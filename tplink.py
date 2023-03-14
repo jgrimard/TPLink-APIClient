@@ -33,6 +33,8 @@ from Crypto.Util.Padding import pad, unpad
 from Crypto.Hash import MD5
 from base64 import b64encode, b64decode
 
+import urllib
+
 class LoginException(Exception):
     pass
 
@@ -104,6 +106,91 @@ class TPLinkClient:
         }
 
         return self.__request(url, data, encrypt = True)
+    
+## CUSTOM FUNCTIONS ## JASON GRIMARD 3/13/2023
+    
+    # This function returns the status of the router LEDs
+    def get_led_status(self):
+        url = self.get_url('admin/ledgeneral', 'setting')
+        data = {
+            'operation': 'read'
+        }
+
+        return self.__request(url, data, encrypt = True)
+    
+    # This function toggles the status of the router LEDs
+    def set_led_status(self, status):
+        url = self.get_url('admin/ledgeneral', 'setting')
+        data = {
+            'operation': 'write',
+            'led_status': status
+        }
+
+        return self.__request(url, data, encrypt = True)
+    
+    # This function lists the devices that are available to block
+    def get_black_devices(self):
+        url = self.get_url('admin/access_control', 'black_devices')
+        data = {
+            'operation': 'load'
+        }
+
+        return self.__request(url, data, encrypt = True)
+    
+    # This function lists the devices that are currently blocked
+    def get_black_list(self):
+        url = self.get_url('admin/access_control', 'black_list')
+        data = {
+            'operation': 'load'
+        }
+
+        return self.__request(url, data, encrypt = True)
+    
+
+    # This function blocks a device by MAC address
+    def block_device(self, mac):
+        url = self.get_url('admin/access_control', 'black_devices')
+        device_data = {
+                "mac":mac,
+                "host":"NOT HOST"
+        }
+        # data needs to be url encoded and wrapped in brackets
+        encoded_device_data = urllib.parse.quote_plus(f"[{json.dumps(device_data)}]")
+        data = {
+            'operation': 'block',
+            'key': 'key=1', # not sure if a key is really needed
+            'index': 0,
+            'data': encoded_device_data
+        }
+
+        return self.__request(url, data, encrypt = True)
+
+    # This function unblocks a device by MAC address
+    def unblock_device(self, mac):
+        url = self.get_url('admin/access_control', 'black_list')
+        blocked_devices = self.get_black_list()
+        index = 0
+        device_found = False
+        key = 'anything'
+        # loop through the blocked devices to get the index
+        for device in blocked_devices['data']:
+            if device['mac'] == mac:
+                device_found = True
+                key = device.get('key', 'anything') # not sure if a key is really needed
+                break
+            index += 1
+        if not device_found:
+            return "Device not found in black list"
+        data = {
+            'key': key,
+            'index': str(index),
+            'operation': 'remove'
+        }
+
+        return self.__request(url, data, encrypt = True)
+        
+
+## END CUSTOM FUNCTIONS ##
 
     def __request(self, url, data, encrypt = False, is_login = False):
         if encrypt:
@@ -139,21 +226,36 @@ class TPLinkClient:
         assert r.text != ''
 
         if encrypt:
-            # parse the json response
-            raw_response_json = json.loads(r.text)
-            assert 'data' in raw_response_json # base64
+            # Try to parse the json response
+            try:
+                raw_response_json = json.loads(r.text)
+                assert 'data' in raw_response_json # base64
 
-            # decode base64 string
-            encrypted_response_data = b64decode(raw_response_json['data'])
+                # decode base64 string
+                encrypted_response_data = b64decode(raw_response_json['data'])
 
-            # decrypt the response using our AES key
-            aes_decryptor = self.__gen_aes_cipher(self.aes_key)
-            response = aes_decryptor.decrypt(encrypted_response_data)
+                # decrypt the response using our AES key
+                aes_decryptor = self.__gen_aes_cipher(self.aes_key)
+                response = aes_decryptor.decrypt(encrypted_response_data)
 
-            # unpad using pkcs7
-            j = unpad(response, 16, 'pkcs7').decode('utf8')
+                # unpad using pkcs7
+                j = unpad(response, 16, 'pkcs7').decode('utf8')
 
-            return json.loads(j)
+                return json.loads(j)
+            # Added 3/13/2023 JG
+            # If we fail to parse the json response, try parsing as a string response
+            except json.decoder.JSONDecodeError:
+                # decode base64 string
+                encrypted_response_data = b64decode(r.text)
+
+                # decrypt the response using our AES key
+                aes_decryptor = self.__gen_aes_cipher(self.aes_key)
+                response = aes_decryptor.decrypt(encrypted_response_data)
+
+                # unpad using pkcs7
+                j = unpad(response, 16, 'pkcs7').decode('utf8')
+                return j
+        # If not encrypting, just return the json response
         else:
             return json.loads(r.text)
 
